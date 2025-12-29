@@ -1,0 +1,55 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: TRPG Discord Bot - Serverless MVP
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 10
+    MemorySize: 512
+    Environment:
+      Variables:
+        LOG_LEVEL: INFO
+
+Parameters:
+  DiscordPublicKey:
+    Type: String
+  DatabaseUrl:
+    Type: String
+  DiscordBotToken:
+    Type: String
+
+Resources:
+  DiscordInteractionApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowHeaders:
+          - '*'
+        AllowMethods:
+          - POST
+
+  DiscordInteractionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: trpg_bot.handler.lambda_handler
+      Environment:
+        Variables:
+          DISCORD_PUBLIC_KEY: !Ref DiscordPublicKey
+          DATABASE_URL: !Ref DatabaseUrl
+          DISCORD_BOT_TOKEN: !Ref DiscordBotToken
+      Events:
+        DiscordInteraction:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /interactions
+            Method: POST
+
+Outputs:
+  DiscordInteractionUrl:
+    Description: API Gateway endpoint
+    Value: !Sub 'https://${DiscordInteractionApi}.execute-api.${AWS::Region}.amazonaws.com/interactions'

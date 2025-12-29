@@ -1,0 +1,1 @@
+"""TRPG Discord bot package."""
