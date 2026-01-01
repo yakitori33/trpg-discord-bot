@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
+
+load_dotenv() {
+  local path="$1"
+  if [[ -f "${path}" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "${path}"
+    set +a
+  fi
+}
+
+# Optional: allow running the script without manually exporting variables.
+load_dotenv "${REPO_ROOT}/.env"
+load_dotenv "${REPO_ROOT}/scenario-weaver/.env"
+
 STACK_NAME="${STACK_NAME:-discord-trpg-ui}"
 REGION="${REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}}"
 TEMPLATE_FILE="${TEMPLATE_FILE:-activity-ui.yaml}"
@@ -70,6 +88,10 @@ else
 
   export VITE_ACTIVITY_MODE="${VITE_ACTIVITY_MODE:-discord}"
   export VITE_FRONTEND_BUILD_VERSION="${VITE_FRONTEND_BUILD_VERSION}"
+
+  if [[ -z "${VITE_DISCORD_CLIENT_ID:-}" && -n "${DISCORD_APPLICATION_ID:-}" ]]; then
+    export VITE_DISCORD_CLIENT_ID="${DISCORD_APPLICATION_ID}"
+  fi
 
   if [[ -z "${VITE_DISCORD_CLIENT_ID:-}" && -n "${DISCORD_BOT_TOKEN:-}" ]]; then
     # Convenience: derive VITE_DISCORD_CLIENT_ID from bot token (does NOT print the token).
