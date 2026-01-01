@@ -307,7 +307,7 @@ def create_session(
     status: str,
     guild_id: str,
     channel_id: str,
-    thread_id: str,
+    thread_id: str | None,
     min_players: int,
     max_players: int,
     created_by: str,
@@ -377,6 +377,14 @@ def update_session_card_message(session_id: str, message_id: str) -> None:
         Key=_key(_session_pk(session_id), "META"),
         UpdateExpression="SET card_message_id=:m",
         ExpressionAttributeValues={":m": message_id},
+    )
+
+
+def update_session_thread(session_id: str, thread_id: str) -> None:
+    get_table().update_item(
+        Key=_key(_session_pk(session_id), "META"),
+        UpdateExpression="SET thread_id=:t",
+        ExpressionAttributeValues={":t": thread_id},
     )
 
 

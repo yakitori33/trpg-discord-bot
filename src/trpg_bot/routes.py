@@ -65,25 +65,34 @@ def refresh_session_card(session_id: str) -> None:
     session = repositories.get_session_with_details(session_id)
     if not session:
         return
+    thread_id = session.get("thread_id")
+    if not thread_id:
+        return
 
-    participants = repositories.list_participants(session_id)
-    poll = repositories.latest_poll_for_session(session_id)
-    poll_deadline = _format_deadline(poll["deadline"]) if poll and poll.get("deadline") else None
-    missing = []
-    if poll:
-        include_ids = [session["gm_user_id"]] if session.get("gm_user_id") else None
-        missing_records = repositories.list_poll_missing_responses(poll["poll_id"], include_user_ids=include_ids)
-        missing = [m["display_name"] for m in missing_records]
+    try:
+        participants = repositories.list_participants(session_id)
+        poll = repositories.latest_poll_for_session(session_id)
+        poll_deadline = _format_deadline(poll["deadline"]) if poll and poll.get("deadline") else None
+        missing = []
+        if poll:
+            include_ids = [session["gm_user_id"]] if session.get("gm_user_id") else None
+            missing_records = repositories.list_poll_missing_responses(poll["poll_id"], include_user_ids=include_ids)
+            missing = [m["display_name"] for m in missing_records]
 
-    next_action = _next_action_text(session, missing, poll_deadline)
-    embed = embeds.session_card_embed(session, participants, missing, next_action, poll_deadline)
+        next_action = _next_action_text(session, missing, poll_deadline)
+        embed = embeds.session_card_embed(session, participants, missing, next_action, poll_deadline)
 
-    if session.get("card_message_id"):
-        edit_message(session["thread_id"], session["card_message_id"], {"embeds": [embed]})
-    else:
-        message = send_message(session["thread_id"], {"embeds": [embed]})
-        pin_message(session["thread_id"], message["id"])
-        repositories.update_session_card_message(session_id, message["id"])
+        if session.get("card_message_id"):
+            edit_message(thread_id, session["card_message_id"], {"embeds": [embed]})
+        else:
+            message = send_message(thread_id, {"embeds": [embed]})
+            repositories.update_session_card_message(session_id, message["id"])
+            try:
+                pin_message(thread_id, message["id"])
+            except Exception:
+                logger.exception("Pin failed for session card (ignored)")
+    except Exception:
+        logger.exception("Failed to refresh session card (ignored)")
 
 
 def _ensure_manage_permission(session: dict, actor_id: str) -> bool:
@@ -106,7 +115,10 @@ def handle_setup(interaction: dict) -> dict:
         ],
     }
     message = send_message(channel_id, payload)
-    pin_message(channel_id, message["id"])
+    try:
+        pin_message(channel_id, message["id"])
+    except Exception:
+        logger.exception("Pin failed for ops panel (ignored)")
     return _respond("管制塔パネルを投稿しました。", ephemeral=True)
 
 

@@ -271,6 +271,18 @@ def _parse_int(value: Any, default: int | None = None) -> int | None:
         return default
 
 
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float, Decimal)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "y", "on")
+    return False
+
+
 def _list_scenarios_for_ui(keyword: str | None, limit: int) -> list[dict]:
     if keyword and isinstance(keyword, str) and keyword.strip():
         return repositories.search_scenarios(keyword.strip(), limit=limit)
@@ -478,6 +490,7 @@ def _handle_session_create(event: dict) -> dict:
     session_type = body.get("sessionType") or body.get("session_type") or None
     duration = body.get("duration") or None
     teaser_slots = body.get("teaserSlots") or body.get("teaser_slots") or None
+    create_thread_flag = _coerce_bool(body.get("createThread") or body.get("create_thread"))
 
     try:
         actor_id, actor_name = _resolve_actor_from_auth_token(auth_token)
@@ -493,18 +506,19 @@ def _handle_session_create(event: dict) -> dict:
             logger.exception("Scenario lookup failed")
             return _response({"error": f"Scenario lookup failed: {exc}"}, status=500)
 
-    # Basic validation that the channel belongs to the guild and the user is in that guild.
-    try:
-        ch = get_channel(str(channel_id))
-        if str(ch.get("guild_id") or "") != str(guild_id):
-            return _response({"error": "channelId does not belong to guildId"}, status=400)
-    except DiscordApiError as exc:
-        return _response({"error": f"Discord channel lookup failed: {exc}"}, status=403)
+    if create_thread_flag:
+        # Basic validation that the channel belongs to the guild and the user is in that guild.
+        try:
+            ch = get_channel(str(channel_id))
+            if str(ch.get("guild_id") or "") != str(guild_id):
+                return _response({"error": "channelId does not belong to guildId"}, status=400)
+        except DiscordApiError as exc:
+            return _response({"error": f"Discord channel lookup failed: {exc}"}, status=403)
 
-    try:
-        get_guild_member(str(guild_id), actor_id)
-    except DiscordApiError as exc:
-        return _response({"error": f"User is not a guild member (or bot lacks permission): {exc}"}, status=403)
+        try:
+            get_guild_member(str(guild_id), actor_id)
+        except DiscordApiError as exc:
+            return _response({"error": f"User is not a guild member (or bot lacks permission): {exc}"}, status=403)
 
     gm_user_id = actor_id if str(gm_type) == "self" else None
 
@@ -513,7 +527,6 @@ def _handle_session_create(event: dict) -> dict:
         if gm_user_id:
             repositories.upsert_user(gm_user_id, str(actor_name))
 
-        thread = create_thread(str(channel_id), str(title))
         session_id = repositories.create_session(
             scenario_id=str(scenario_id) if scenario_id else None,
             gm_user_id=gm_user_id,
@@ -521,7 +534,7 @@ def _handle_session_create(event: dict) -> dict:
             status="recruiting",
             guild_id=str(guild_id),
             channel_id=str(channel_id),
-            thread_id=thread["id"],
+            thread_id=None,
             min_players=players_min,
             max_players=players_max,
             created_by=actor_id,
@@ -529,17 +542,50 @@ def _handle_session_create(event: dict) -> dict:
             duration=str(duration) if duration else None,
             teaser_slots=teaser_slots if isinstance(teaser_slots, list) else None,
         )
-        repositories.log_audit(session_id, "session_created_ui", actor_id, {"thread_id": thread["id"]})
-        refresh_session_card(session_id)
-        return _response(
-            {
-                "success": True,
-                "sessionId": session_id,
-                "threadId": thread["id"],
-                "threadUrl": f"https://discord.com/channels/{guild_id}/{thread['id']}",
-            },
-            status=200,
+
+        warnings: list[str] = []
+        thread_id: str | None = None
+        thread_url: str | None = None
+
+        if create_thread_flag:
+            try:
+                thread = create_thread(str(channel_id), str(title))
+                thread_id = str(thread.get("id") or "") or None
+                if thread_id:
+                    repositories.update_session_thread(session_id, thread_id)
+                    thread_url = f"https://discord.com/channels/{guild_id}/{thread_id}"
+                    repositories.log_audit(session_id, "session_thread_created_ui", actor_id, {"thread_id": thread_id})
+                else:
+                    warnings.append("Thread create returned no id")
+            except DiscordApiError as exc:
+                warnings.append(f"Thread create failed: {exc}")
+            except Exception as exc:
+                warnings.append(f"Thread create failed: {exc}")
+
+            if thread_id:
+                try:
+                    refresh_session_card(session_id)
+                except DiscordApiError as exc:
+                    warnings.append(f"Session card refresh failed: {exc}")
+                except Exception as exc:
+                    warnings.append(f"Session card refresh failed: {exc}")
+
+        repositories.log_audit(
+            session_id,
+            "session_created_ui",
+            actor_id,
+            {"thread_id": thread_id, "create_thread": create_thread_flag, "warnings": warnings[:5] if warnings else None},
         )
+
+        payload: dict[str, Any] = {"success": True, "sessionId": session_id}
+        if thread_id:
+            payload["threadId"] = thread_id
+        if thread_url:
+            payload["threadUrl"] = thread_url
+        if warnings:
+            payload["warnings"] = warnings
+
+        return _response(payload, status=200)
     except DiscordApiError as exc:
         logger.exception("Discord REST action failed")
         return _response({"error": str(exc)}, status=502)
