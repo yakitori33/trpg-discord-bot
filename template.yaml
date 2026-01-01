@@ -23,7 +23,7 @@ Parameters:
     Type: String
   BackendBuildVersion:
     Type: String
-    Default: "1.0.0"
+    Default: "0.0.0"
   TableName:
     Type: String
     Default: trpg-discord-bot

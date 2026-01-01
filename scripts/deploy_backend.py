@@ -129,29 +129,29 @@ def _try_read_stack_output(stack_name: str, region: str, output_key: str) -> str
     return value
 
 
-_SEMVER_RE = re.compile(r"^(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)$")
+_SEMVER_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$")
 
 
 def _next_sequential_version(current_version: str | None) -> str:
-    desired_major = 1
+    desired_major = 0
     desired_minor = 0
     max_patch = 1_000_000  # treat huge patch (old timestamp style) as "unknown"
 
     if not current_version:
-        return f"{desired_major}.{desired_minor}.0"
+        return f"{desired_major}.{desired_minor}.1"
 
     m = _SEMVER_RE.match(current_version.strip())
     if not m:
-        return f"{desired_major}.{desired_minor}.0"
+        return f"{desired_major}.{desired_minor}.1"
 
     major = int(m.group("major"))
     minor = int(m.group("minor"))
     patch = int(m.group("patch"))
 
     if major != desired_major or minor != desired_minor:
-        return f"{desired_major}.{desired_minor}.0"
+        return f"{desired_major}.{desired_minor}.1"
     if patch >= max_patch:
-        return f"{desired_major}.{desired_minor}.0"
+        return f"{desired_major}.{desired_minor}.1"
     return f"{desired_major}.{desired_minor}.{patch + 1}"
 
 

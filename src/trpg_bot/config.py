@@ -52,4 +52,4 @@ def get_region() -> str:
 
 
 def get_backend_build_version() -> str:
-    return optional_env("BACKEND_BUILD_VERSION", "1.0.0") or "1.0.0"
+    return optional_env("BACKEND_BUILD_VERSION", "0.0.0") or "0.0.0"
