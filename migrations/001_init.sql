@@ -27,10 +27,12 @@ CREATE TABLE sessions (
     session_id SERIAL PRIMARY KEY,
     scenario_id INTEGER REFERENCES scenarios(scenario_id),
     gm_user_id TEXT REFERENCES users(discord_id),
-    status TEXT NOT NULL,
+    title TEXT,
+    status TEXT NOT NULL DEFAULT 'recruiting' CHECK (status IN ('proposed', 'recruiting', 'scheduling', 'confirmed', 'running', 'completed', 'canceled')),
     guild_id TEXT NOT NULL,
     channel_id TEXT NOT NULL,
     thread_id TEXT NOT NULL,
+    card_message_id TEXT,
     min_players INTEGER DEFAULT 1,
     max_players INTEGER DEFAULT 5,
     scheduled_start TIMESTAMP WITH TIME ZONE,
@@ -51,7 +53,8 @@ CREATE TABLE availability_polls (
     poll_id SERIAL PRIMARY KEY,
     session_id INTEGER REFERENCES sessions(session_id) ON DELETE CASCADE,
     deadline TIMESTAMP WITH TIME ZONE,
-    timezone_basis TEXT NOT NULL
+    timezone_basis TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 CREATE TABLE availability_slots (
@@ -64,7 +67,7 @@ CREATE TABLE availability_slots (
 CREATE TABLE availability_responses (
     slot_id INTEGER REFERENCES availability_slots(slot_id) ON DELETE CASCADE,
     user_id TEXT REFERENCES users(discord_id) ON DELETE CASCADE,
-    status TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('OK', 'MAYBE', 'NO')),
     comment TEXT,
     PRIMARY KEY (slot_id, user_id)
 );

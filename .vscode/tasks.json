@@ -1,0 +1,41 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Deploy: Backend (SAM)",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "set -a; [ -f .env ] && source .env; set +a; python scripts/deploy_backend.py"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      }
+    },
+    {
+      "label": "Deploy: Activity UI (S3+CloudFront)",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "set -a; [ -f .env ] && source .env; set +a; bash scripts/deploy_activity_ui.sh"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      }
+    }
+  ]
+}
