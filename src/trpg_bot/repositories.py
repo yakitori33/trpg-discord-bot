@@ -300,6 +300,54 @@ def _session_pk(session_id: str) -> str:
     return f"SESSION#{session_id}"
 
 
+def _session_status_pk(status: str) -> str:
+    return f"SESSION_STATUS#{status}"
+
+
+def _session_status_sk(created_at: str, session_id: str) -> str:
+    return f"CREATED#{created_at}#{session_id}"
+
+
+def _session_index_item(session: dict, status: str) -> dict:
+    created_at = str(session.get("created_at") or _now_iso())
+    session_id = str(session.get("session_id") or "")
+    item = {
+        "entity": "session_status_index",
+        "status": status,
+        "session_id": session_id,
+        "scenario_id": session.get("scenario_id"),
+        "gm_user_id": session.get("gm_user_id"),
+        "title": session.get("title"),
+        "guild_id": session.get("guild_id"),
+        "channel_id": session.get("channel_id"),
+        "thread_id": session.get("thread_id"),
+        "min_players": session.get("min_players"),
+        "max_players": session.get("max_players"),
+        "session_type": session.get("session_type"),
+        "duration": session.get("duration"),
+        "teaser_slots": session.get("teaser_slots"),
+        "created_at": created_at,
+        "created_by": session.get("created_by"),
+    }
+    _with_keys(item, _session_status_pk(status), _session_status_sk(created_at, session_id))
+    return item
+
+
+def _upsert_session_status_index(session: dict, status: str) -> None:
+    if not status:
+        return
+    session_id = str(session.get("session_id") or "")
+    if not session_id:
+        return
+    get_table().put_item(Item=_session_index_item(session, status))
+
+
+def _delete_session_status_index(session_id: str, status: str, created_at: str) -> None:
+    if not session_id or not status or not created_at:
+        return
+    get_table().delete_item(Key=_key(_session_status_pk(status), _session_status_sk(created_at, session_id)))
+
+
 def create_session(
     scenario_id: str | None,
     gm_user_id: str | None,
@@ -317,6 +365,7 @@ def create_session(
 ) -> str:
     table = get_table()
     session_id = _new_id("ses_")
+    created_at = _now_iso()
     item = {
         "entity": "session",
         "session_id": session_id,
@@ -336,10 +385,11 @@ def create_session(
         "scheduled_start": None,
         "scheduled_end": None,
         "created_by": created_by,
-        "created_at": _now_iso(),
+        "created_at": created_at,
     }
     _with_keys(item, _session_pk(session_id), "META")
     table.put_item(Item=item)
+    _upsert_session_status_index(item, status)
     return session_id
 
 
@@ -386,6 +436,41 @@ def update_session_thread(session_id: str, thread_id: str) -> None:
         UpdateExpression="SET thread_id=:t",
         ExpressionAttributeValues={":t": thread_id},
     )
+
+
+def list_sessions_by_status(status: str, limit: int = 30) -> list[dict]:
+    table = get_table()
+
+    try:
+        resp = table.query(
+            KeyConditionExpression=Key(_pk_name()).eq(_session_status_pk(status))
+            & Key(_sk_name()).begins_with("CREATED#"),
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        items = resp.get("Items", [])
+        if items:
+            return items
+    except Exception:
+        # Fall back to scan below (for older sessions created before index existed).
+        pass
+
+    scanned: list[dict] = []
+    start_key = None
+    while True:
+        kwargs: dict[str, Any] = {
+            "FilterExpression": Attr("entity").eq("session") & Attr("status").eq(status),
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = table.scan(**kwargs)
+        scanned.extend(resp.get("Items", []))
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
+
+    scanned.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
+    return scanned[:limit]
 
 
 def list_participants(session_id: str) -> list[str]:
@@ -578,12 +663,28 @@ def get_poll_deadline(poll_id: str) -> datetime | None:
 
 
 def mark_session_status(session_id: str, status: str) -> None:
+    session = get_session(session_id)
+    prev_status = str(session.get("status") or "") if session else ""
+    created_at = str(session.get("created_at") or "") if session else ""
+
     get_table().update_item(
         Key=_key(_session_pk(session_id), "META"),
         UpdateExpression="SET #status=:s",
         ExpressionAttributeNames={"#status": "status"},
         ExpressionAttributeValues={":s": status},
     )
+
+    if session:
+        session["status"] = status
+        try:
+            _upsert_session_status_index(session, status)
+        except Exception:
+            pass
+        try:
+            if prev_status and created_at and prev_status != status:
+                _delete_session_status_index(session_id, prev_status, created_at)
+        except Exception:
+            pass
 
 
 def add_play_history(scenario_id: str, user_id: str, user_display_name: str, role: str, session_id: str, notes: str) -> None:

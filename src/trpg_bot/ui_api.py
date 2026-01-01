@@ -252,6 +252,70 @@ def _scenario_to_ui(s: dict) -> dict:
     }
 
 
+def _session_status_to_recruiting_status(status: str) -> str:
+    if status == "recruiting":
+        return "recruiting"
+    if status in ("confirmed", "running", "completed"):
+        return "confirmed"
+    return "locked"
+
+
+def _session_to_recruiting_summary(session: dict) -> dict | None:
+    session_id = str(session.get("session_id") or "")
+    scenario_id = str(session.get("scenario_id") or "")
+    if not session_id or not scenario_id:
+        return None
+
+    raw_status = str(session.get("status") or "recruiting")
+    status = _session_status_to_recruiting_status(raw_status)
+
+    try:
+        participant_records = repositories.list_participant_records(session_id)
+    except Exception:
+        participant_records = []
+
+    applicants = [
+        {"id": str(p.get("user_id") or ""), "name": str(p.get("display_name") or p.get("user_id") or "")}
+        for p in participant_records
+        if p.get("user_id")
+    ]
+
+    max_players = _parse_int(session.get("max_players"), default=0) or 0
+    remaining_seats = max(0, int(max_players) - len(applicants))
+
+    deadline = None
+    try:
+        poll = repositories.latest_poll_for_session(session_id)
+        if poll and poll.get("deadline"):
+            deadline = str(poll.get("deadline"))
+    except Exception:
+        deadline = None
+
+    teaser_slots = session.get("teaser_slots") if isinstance(session.get("teaser_slots"), list) else None
+
+    gm_name = "未定"
+    gm_user_id = session.get("gm_user_id")
+    if gm_user_id:
+        try:
+            prof = repositories.get_user_profile(str(gm_user_id))
+            gm_name = str((prof or {}).get("display_name_cache") or gm_user_id)
+        except Exception:
+            gm_name = str(gm_user_id)
+
+    summary: dict[str, Any] = {
+        "scenarioId": scenario_id,
+        "status": status,
+        "remainingSeats": remaining_seats,
+        "applicants": applicants,
+        "gmName": gm_name,
+    }
+    if deadline:
+        summary["deadline"] = deadline
+    if teaser_slots:
+        summary["teaserSlots"] = teaser_slots
+    return summary
+
+
 def _coerce_str_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -405,8 +469,24 @@ def _handle_browse(event: dict) -> dict:
 
     keyword = qp.get("q") if isinstance(qp, dict) else None
     try:
+        recruiting_sessions: list[dict] = []
+        try:
+            recruiting_sessions = repositories.list_sessions_by_status("recruiting", limit=50)
+        except Exception:
+            recruiting_sessions = []
+
+        recruiting_by_scenario: dict[str, dict] = {}
+        for ses in recruiting_sessions:
+            sid = str(ses.get("scenario_id") or "")
+            if not sid:
+                continue
+            prev = recruiting_by_scenario.get(sid)
+            if not prev or str(ses.get("created_at") or "") > str(prev.get("created_at") or ""):
+                recruiting_by_scenario[sid] = ses
+
         items = _list_scenarios_for_ui(str(keyword) if keyword is not None else None, limit=limit)
-        scenarios = []
+        scenarios: list[dict] = []
+        recruiting_scenarios: list[dict] = []
         for s in items:
             try:
                 gm_count = len(repositories.list_capable_gms(str(s.get("scenario_id") or ""))) if s.get("scenario_id") else 0
@@ -414,16 +494,21 @@ def _handle_browse(event: dict) -> dict:
                 gm_count = 0
             ui = _scenario_to_ui(s)
             ui["availableGmCount"] = gm_count
+            scenario_id = str(s.get("scenario_id") or "")
+            if scenario_id and scenario_id in recruiting_by_scenario:
+                summary = _session_to_recruiting_summary(recruiting_by_scenario[scenario_id])
+                if summary:
+                    ui["recruiting"] = summary
+                    recruiting_scenarios.append(ui)
             scenarios.append(ui)
+
+        rows: list[dict[str, Any]] = []
+        if recruiting_scenarios:
+            rows.append({"id": "recruiting", "title": "募集中", "scenarios": recruiting_scenarios})
+        rows.append({"id": "registered", "title": "登録済みのシナリオ", "scenarios": scenarios})
         return _response(
             {
-                "rows": [
-                    {
-                        "id": "registered",
-                        "title": "登録済みのシナリオ",
-                        "scenarios": scenarios,
-                    }
-                ]
+                "rows": rows
             },
             status=200,
         )
@@ -456,6 +541,16 @@ def _handle_scenario_detail(event: dict, scenario_id: str) -> dict:
             ui["availableGmCount"] = len(repositories.list_capable_gms(scenario_id))
         except Exception:
             ui["availableGmCount"] = 0
+        try:
+            sessions = repositories.list_sessions_by_status("recruiting", limit=50)
+            matching = [s for s in sessions if str(s.get("scenario_id") or "") == str(scenario_id)]
+            if matching:
+                matching.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
+                summary = _session_to_recruiting_summary(matching[0])
+                if summary:
+                    ui["recruiting"] = summary
+        except Exception:
+            pass
         return _response({"scenario": ui}, status=200)
     except Exception as exc:
         logger.exception("Scenario detail failed")
