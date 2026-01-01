@@ -91,6 +91,14 @@ def _discord_get_current_user(access_token: str) -> dict:
     return resp.json()
 
 
+def _discord_avatar_url(me: dict) -> str | None:
+    user_id = me.get("id")
+    avatar = me.get("avatar")
+    if user_id and avatar:
+        return f"https://cdn.discordapp.com/avatars/{user_id}/{avatar}.png?size=64"
+    return None
+
+
 def _resolve_actor_from_auth_token(auth_token: str) -> tuple[str, str]:
     if _is_activity_session_token(auth_token):
         session = repositories.get_activity_session(auth_token)
@@ -100,8 +108,9 @@ def _resolve_actor_from_auth_token(auth_token: str) -> tuple[str, str]:
         if not actor_id:
             raise RuntimeError("Invalid session (missing discord_id)")
         actor_name = str(session.get("display_name_cache") or actor_id)
+        actor_avatar_url = session.get("avatar_url")
         try:
-            repositories.ensure_user(actor_id, actor_name)
+            repositories.ensure_user(actor_id, actor_name, avatar_url=str(actor_avatar_url) if actor_avatar_url else None)
         except Exception:
             logger.exception("Failed to ensure user profile from activity session")
         repositories.touch_activity_session(auth_token)
@@ -110,7 +119,7 @@ def _resolve_actor_from_auth_token(auth_token: str) -> tuple[str, str]:
     me = _discord_get_current_user(auth_token)
     actor_id = me["id"]
     actor_name = me.get("global_name") or me.get("username") or actor_id
-    repositories.ensure_user(actor_id, str(actor_name))
+    repositories.ensure_user(actor_id, str(actor_name), avatar_url=_discord_avatar_url(me))
     return actor_id, str(actor_name)
 
 
@@ -175,11 +184,12 @@ def _handle_activity_login(event: dict) -> dict:
         me = _discord_get_current_user(access_token)
         actor_id = me["id"]
         actor_name = me.get("global_name") or me.get("username") or actor_id
+        avatar_url = _discord_avatar_url(me)
 
-        repositories.upsert_user(actor_id, str(actor_name))
-        session_token = repositories.create_activity_session(actor_id, str(actor_name))
+        repositories.upsert_user(actor_id, str(actor_name), avatar_url=avatar_url)
+        session_token = repositories.create_activity_session(actor_id, str(actor_name), avatar_url=avatar_url)
         return _response(
-            {"sessionToken": session_token, "userId": actor_id, "displayName": str(actor_name)},
+            {"sessionToken": session_token, "userId": actor_id, "displayName": str(actor_name), "avatarUrl": avatar_url},
             status=200,
         )
     except Exception as exc:
@@ -207,12 +217,13 @@ def _handle_activity_me(event: dict) -> dict:
 
     user_id = session.get("discord_id") or ""
     display_name = session.get("display_name_cache") or user_id
+    avatar_url = session.get("avatar_url") or None
     if user_id:
         try:
-            repositories.ensure_user(str(user_id), str(display_name))
+            repositories.ensure_user(str(user_id), str(display_name), avatar_url=str(avatar_url) if avatar_url else None)
         except Exception:
             logger.exception("Failed to ensure user profile on activity/me")
-    return _response({"userId": user_id, "displayName": display_name}, status=200)
+    return _response({"userId": user_id, "displayName": display_name, "avatarUrl": avatar_url}, status=200)
 
 
 def _scenario_to_ui(s: dict) -> dict:
@@ -274,11 +285,23 @@ def _session_to_recruiting_summary(session: dict) -> dict | None:
     except Exception:
         participant_records = []
 
-    applicants = [
-        {"id": str(p.get("user_id") or ""), "name": str(p.get("display_name") or p.get("user_id") or "")}
-        for p in participant_records
-        if p.get("user_id")
-    ]
+    applicants: list[dict[str, Any]] = []
+    for p in participant_records:
+        user_id = str(p.get("user_id") or "")
+        if not user_id:
+            continue
+        name = str(p.get("display_name") or user_id)
+        avatar_url = None
+        try:
+            prof = repositories.get_user_profile(user_id)
+            avatar_url = (prof or {}).get("avatar_url") or None
+        except Exception:
+            avatar_url = None
+
+        applicant: dict[str, Any] = {"id": user_id, "name": name}
+        if avatar_url:
+            applicant["avatarUrl"] = str(avatar_url)
+        applicants.append(applicant)
 
     max_players = _parse_int(session.get("max_players"), default=0) or 0
     remaining_seats = max(0, int(max_players) - len(applicants))
@@ -303,12 +326,15 @@ def _session_to_recruiting_summary(session: dict) -> dict | None:
             gm_name = str(gm_user_id)
 
     summary: dict[str, Any] = {
+        "sessionId": session_id,
         "scenarioId": scenario_id,
         "status": status,
         "remainingSeats": remaining_seats,
         "applicants": applicants,
         "gmName": gm_name,
     }
+    if gm_user_id:
+        summary["gmUserId"] = str(gm_user_id)
     if deadline:
         summary["deadline"] = deadline
     if teaser_slots:
@@ -689,6 +715,49 @@ def _handle_session_create(event: dict) -> dict:
         return _response({"error": str(exc)}, status=500)
 
 
+def _handle_session_join(event: dict) -> dict:
+    if _get_method(event) != "POST":
+        return _response({"error": "method not allowed"}, status=405)
+
+    headers = event.get("headers") or {}
+    auth_token = _bearer_token(headers)
+    if not auth_token:
+        return _response({"error": "Missing Authorization: Bearer <token>"}, status=401)
+
+    body = _parse_json_body(event)
+    session_id = body.get("sessionId") or body.get("session_id")
+    if not session_id or not isinstance(session_id, str):
+        return _response({"error": "Missing sessionId"}, status=400)
+
+    try:
+        actor_id, actor_name = _resolve_actor_from_auth_token(auth_token)
+    except Exception as exc:
+        logger.exception("Failed to resolve actor")
+        return _response({"error": f"Unauthorized: {exc}"}, status=401)
+
+    session = repositories.get_session(str(session_id))
+    if not session:
+        return _response({"error": "Session not found"}, status=404)
+
+    status = str(session.get("status") or "")
+    if status not in ("recruiting", "scheduling"):
+        return _response({"error": f"Session is not joinable (status={status})"}, status=409)
+
+    try:
+        participant_records = repositories.list_participant_records(str(session_id))
+        participant_ids = {p.get("user_id") for p in participant_records}
+        if actor_id not in participant_ids:
+            max_players = int(session.get("max_players") or 0)
+            if max_players > 0 and len(participant_ids) >= max_players:
+                return _response({"error": "Session is full"}, status=409)
+            repositories.add_participant(str(session_id), actor_id, str(actor_name), "PL")
+        repositories.log_audit(str(session_id), "session_join_ui", actor_id, {})
+        return _response({"success": True, "sessionId": str(session_id)}, status=200)
+    except Exception as exc:
+        logger.exception("Session join failed")
+        return _response({"error": str(exc)}, status=500)
+
+
 def lambda_handler(event: dict, context: Any) -> dict:
     method = _get_method(event)
     path = _get_path(event)
@@ -726,5 +795,8 @@ def lambda_handler(event: dict, context: Any) -> dict:
 
     if path == "/api/sessions/create":
         return _handle_session_create(event)
+
+    if path == "/api/sessions/join":
+        return _handle_session_join(event)
 
     return _response({"error": "not found"}, status=404)

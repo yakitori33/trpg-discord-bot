@@ -46,28 +46,40 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}{uuid.uuid4().hex[:8]}"
 
 
-def upsert_user(discord_id: str, display_name: str, timezone_name: str | None = None) -> None:
+def upsert_user(
+    discord_id: str,
+    display_name: str,
+    timezone_name: str | None = None,
+    avatar_url: str | None = None,
+) -> None:
     table = get_table()
     item = {
         "entity": "user",
         "discord_id": discord_id,
         "display_name_cache": display_name,
         "timezone": timezone_name,
+        "avatar_url": avatar_url,
         "updated_at": _now_iso(),
     }
     _with_keys(item, f"USER#{discord_id}", "PROFILE")
     table.put_item(Item=item)
 
 
-def ensure_user(discord_id: str, display_name: str, timezone_name: str | None = None) -> None:
+def ensure_user(
+    discord_id: str,
+    display_name: str,
+    timezone_name: str | None = None,
+    avatar_url: str | None = None,
+) -> None:
     profile = get_user_profile(discord_id)
     if not profile:
-        upsert_user(discord_id, display_name, timezone_name)
+        upsert_user(discord_id, display_name, timezone_name, avatar_url=avatar_url)
         return
 
     needs_name_update = str(profile.get("display_name_cache") or "") != str(display_name)
     needs_tz_update = timezone_name is not None and profile.get("timezone") != timezone_name
-    if not needs_name_update and not needs_tz_update:
+    needs_avatar_update = avatar_url is not None and str(profile.get("avatar_url") or "") != str(avatar_url)
+    if not needs_name_update and not needs_tz_update and not needs_avatar_update:
         return
 
     update_parts = ["updated_at=:u"]
@@ -78,6 +90,9 @@ def ensure_user(discord_id: str, display_name: str, timezone_name: str | None = 
     if needs_tz_update:
         update_parts.append("timezone=:tz")
         values[":tz"] = timezone_name
+    if needs_avatar_update:
+        update_parts.append("avatar_url=:a")
+        values[":a"] = avatar_url
 
     get_table().update_item(
         Key=_key(f"USER#{discord_id}", "PROFILE"),
@@ -93,6 +108,7 @@ def _activity_session_pk(session_token: str) -> str:
 def create_activity_session(
     discord_id: str,
     display_name: str,
+    avatar_url: str | None = None,
     ttl_days: int = DEFAULT_ACTIVITY_SESSION_TTL_DAYS,
 ) -> str:
     table = get_table()
@@ -102,6 +118,7 @@ def create_activity_session(
         "session_token": session_token,
         "discord_id": discord_id,
         "display_name_cache": display_name,
+        "avatar_url": avatar_url,
         "created_at": _now_iso(),
         "last_seen_at": _now_iso(),
         "expires_ts": _expires_ts(ttl_days),
