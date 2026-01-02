@@ -21,6 +21,7 @@ Parameters:
     Type: String
   DiscordBotToken:
     Type: String
+    NoEcho: true
   BackendBuildVersion:
     Type: String
     Default: "0.0.0"
@@ -160,6 +161,12 @@ Resources:
           Properties:
             ApiId: !Ref DiscordInteractionApi
             Path: /api/sessions/create
+            Method: POST
+        UiApiSessionsJoin:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/join
             Method: POST
         UiApiPing:
           Type: HttpApi
