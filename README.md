@@ -6,6 +6,13 @@ Discord上のTRPG運営で発生する情報散逸/日程調整/状態管理を�
 
 ```
 trpg-discord-bot/
+├── scenario-weaver/          # Discord Activity UI (git submodule)
+├── activity-ui.yaml          # UI配信用 (S3 + CloudFront) スタック
+├── scripts/
+│   ├── deploy_backend.py     # Backend(SAM) デプロイ
+│   ├── deploy_activity_ui.sh # UI デプロイ
+│   ├── register_commands.py  # Discordコマンド登録
+│   └── ddb_purge_table.py    # DynamoDBテーブル全消去(開発用)
 ├── src/
 │   └── trpg_bot/
 │       ├── __init__.py
@@ -20,6 +27,21 @@ trpg-discord-bot/
 ├── template.yaml
 └── README.md
 ```
+
+## UI (Discord Activity)
+
+UIは `scenario-weaver/` にあります（git submodule）。
+
+```bash
+git clone --recurse-submodules https://github.com/yakitori33/trpg-discord-bot.git
+# 既にclone済みなら:
+git submodule update --init --recursive
+```
+
+UI単体リポジトリ: `https://github.com/yakitori33/scenario-weaver.git`
+
+ローカル（モック）: `cd scenario-weaver && npm install && npm run dev:mock`  
+Discord（本実装）: `cd scenario-weaver && npm install && npm run dev:live`（※ Activity内でのみ）
 
 ## MVP機能
 - 署名検証（X-Signature-Ed25519/Timestamp）とInteractionルーティング。Type=1 Pingは即応答、コマンドは3秒以内ACK。

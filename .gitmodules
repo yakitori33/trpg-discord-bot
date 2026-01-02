@@ -1,0 +1,3 @@
+[submodule "scenario-weaver"]
+	path = scenario-weaver
+	url = https://github.com/yakitori33/scenario-weaver.git

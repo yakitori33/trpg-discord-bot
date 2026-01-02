@@ -19,6 +19,25 @@ load_dotenv() {
 load_dotenv "${REPO_ROOT}/.env"
 load_dotenv "${REPO_ROOT}/scenario-weaver/.env"
 
+ensure_scenario_weaver() {
+  if [[ -f "${REPO_ROOT}/scenario-weaver/package.json" ]]; then
+    return
+  fi
+
+  # If scenario-weaver is a git submodule, it may not be checked out yet.
+  if [[ -f "${REPO_ROOT}/.gitmodules" ]]; then
+    echo "[boot] scenario-weaver is missing; initializing git submodule..."
+    env -u GITHUB_TOKEN -u GH_TOKEN git submodule update --init --recursive scenario-weaver
+  fi
+
+  if [[ ! -f "${REPO_ROOT}/scenario-weaver/package.json" ]]; then
+    echo "ERROR: scenario-weaver is missing. Clone it or init submodules first."
+    echo "  - git submodule update --init --recursive"
+    echo "  - or: git clone https://github.com/yakitori33/scenario-weaver.git scenario-weaver"
+    exit 1
+  fi
+}
+
 STACK_NAME="${STACK_NAME:-discord-trpg-ui}"
 REGION="${REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}}"
 TEMPLATE_FILE="${TEMPLATE_FILE:-activity-ui.yaml}"
@@ -84,6 +103,7 @@ echo "[3/4] Build UI"
 if [[ "${SKIP_BUILD:-}" == "1" ]]; then
   echo "SKIP_BUILD=1: skipping UI build (will upload existing scenario-weaver/dist)"
 else
+  ensure_scenario_weaver
   pushd scenario-weaver >/dev/null
 
   export VITE_ACTIVITY_MODE="${VITE_ACTIVITY_MODE:-discord}"
