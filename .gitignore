@@ -2,8 +2,20 @@ __pycache__/
 *.pyc
 .env
 .venv/
-.vscode/
+# VSCode
+.vscode/*
+!.vscode/tasks.json
+!.vscode/extensions.json
 .DS_Store
 
 # AWS SAM
 .aws-sam/
+
+# SAM deploy config (often contains secrets)
+samconfig.toml
+
+# Local AWS CLI/SAM installer artifacts
+aws/
+sam-installation/
+awscliv2.zip
+aws-sam-cli.zip

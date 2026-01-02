@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Scenario Weaver (Discord Activity UI) hosting - S3 + CloudFront
+
+Parameters:
+  FrontendBuildVersion:
+    Type: String
+    Default: "1.0.0"
+
+Resources:
+  ActivityUiBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  ActivityUiOac:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  ActivityUiDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: ActivityUiS3Origin
+            DomainName: !GetAtt ActivityUiBucket.RegionalDomainName
+            OriginAccessControlId: !Ref ActivityUiOac
+            S3OriginConfig: {}
+        DefaultCacheBehavior:
+          TargetOriginId: ActivityUiS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+  ActivityUiBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ActivityUiBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action:
+              - s3:GetObject
+            Resource: !Sub "${ActivityUiBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${ActivityUiDistribution}"
+
+Outputs:
+  ActivityUiBucketName:
+    Description: S3 bucket for the Activity UI build artifacts
+    Value: !Ref ActivityUiBucket
+  ActivityUiDistributionId:
+    Description: CloudFront distribution id (for cache invalidation)
+    Value: !Ref ActivityUiDistribution
+  ActivityUiDomainName:
+    Description: CloudFront domain name
+    Value: !GetAtt ActivityUiDistribution.DomainName
+  ActivityUiUrl:
+    Description: Activity UI URL (use this as the Activity URL mapping target)
+    Value: !Sub "https://${ActivityUiDistribution.DomainName}"
+  FrontendBuildVersion:
+    Description: Frontend build version (auto set by deploy script)
+    Value: !Ref FrontendBuildVersion

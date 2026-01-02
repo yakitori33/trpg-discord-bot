@@ -4,22 +4,59 @@ Description: TRPG Discord Bot - Serverless MVP
 
 Globals:
   Function:
-    Runtime: python3.11
-    Timeout: 10
+    Runtime: python3.12
+    Timeout: 30
     MemorySize: 512
     Environment:
       Variables:
         LOG_LEVEL: INFO
 
 Parameters:
-  DiscordPublicKey:
+  DiscordApplicationId:
     Type: String
-  DatabaseUrl:
+  DiscordClientSecret:
+    Type: String
+    NoEcho: true
+  DiscordPublicKey:
     Type: String
   DiscordBotToken:
     Type: String
+    NoEcho: true
+  BackendBuildVersion:
+    Type: String
+    Default: "0.0.0"
+  TableName:
+    Type: String
+    Default: trpg-discord-bot
+  CreateTable:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Set to "true" to let this stack create the DynamoDB table. Use "false" when the table already exists.
+
+Conditions:
+  ShouldCreateTable: !Equals [!Ref CreateTable, "true"]
 
 Resources:
+  TrpgTable:
+    Condition: ShouldCreateTable
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+
   DiscordInteractionApi:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -29,18 +66,30 @@ Resources:
         AllowHeaders:
           - '*'
         AllowMethods:
+          - GET
           - POST
+          - OPTIONS
 
   DiscordInteractionFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: src/
       Handler: trpg_bot.handler.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TableName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource:
+                - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:*
       Environment:
         Variables:
           DISCORD_PUBLIC_KEY: !Ref DiscordPublicKey
-          DATABASE_URL: !Ref DatabaseUrl
           DISCORD_BOT_TOKEN: !Ref DiscordBotToken
+          BACKEND_BUILD_VERSION: !Ref BackendBuildVersion
+          TABLE_NAME: !Ref TableName
       Events:
         DiscordInteraction:
           Type: HttpApi
@@ -49,7 +98,99 @@ Resources:
             Path: /interactions
             Method: POST
 
+  UiApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: trpg_bot.ui_api.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TableName
+      Environment:
+        Variables:
+          DISCORD_APPLICATION_ID: !Ref DiscordApplicationId
+          DISCORD_CLIENT_SECRET: !Ref DiscordClientSecret
+          DISCORD_BOT_TOKEN: !Ref DiscordBotToken
+          BACKEND_BUILD_VERSION: !Ref BackendBuildVersion
+          TABLE_NAME: !Ref TableName
+      Events:
+        UiApiToken:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/oauth/token
+            Method: POST
+        UiApiActivityLogin:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/activity/login
+            Method: POST
+        UiApiActivityMe:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/activity/me
+            Method: GET
+        UiApiScenarios:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/scenarios
+            Method: GET
+        UiApiScenariosCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/scenarios
+            Method: POST
+        UiApiBrowse:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/browse
+            Method: GET
+        UiApiScenarioDetail:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/scenario/{scenarioId}
+            Method: GET
+        UiApiSessionsCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/create
+            Method: POST
+        UiApiSessionsJoin:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/join
+            Method: POST
+        UiApiPing:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/ping
+            Method: GET
+        UiApiVersion:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/version
+            Method: GET
+
 Outputs:
   DiscordInteractionUrl:
     Description: API Gateway endpoint
     Value: !Sub 'https://${DiscordInteractionApi}.execute-api.${AWS::Region}.amazonaws.com/interactions'
+  ApiBaseUrl:
+    Description: API base URL (for Activity UI)
+    Value: !Sub 'https://${DiscordInteractionApi}.execute-api.${AWS::Region}.amazonaws.com'
+  DynamoDbTable:
+    Description: Primary DynamoDB table
+    Value: !Ref TableName
+  BackendBuildVersion:
+    Description: Backend build version (auto set by deploy script)
+    Value: !Ref BackendBuildVersion
