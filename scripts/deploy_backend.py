@@ -277,29 +277,87 @@ def _try_read_stack_parameter(stack_name: str, region: str, parameter_key: str) 
 
 
 _SEMVER_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$")
+_BUILD_NUMBER_RE = re.compile(r"^(?P<num>\d+)$")
+
+
+def _format_build_number(num: int) -> str:
+    if num < 0:
+        num = 0
+    if num < 1000:
+        return f"{num:03d}"
+    return str(num)
+
+
+def _parse_build_number(value: str | None) -> int:
+    if not value:
+        return 0
+    raw = value.strip()
+    if not raw or raw == "None":
+        return 0
+
+    m = _BUILD_NUMBER_RE.match(raw)
+    if m:
+        try:
+            return int(m.group("num"))
+        except ValueError:
+            return 0
+
+    m = _SEMVER_RE.match(raw)
+    if m:
+        try:
+            return int(m.group("patch"))
+        except ValueError:
+            return 0
+
+    return 0
+
+
+def _normalize_build_version(value: str | None) -> str | None:
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw or raw == "None":
+        return None
+
+    m = _BUILD_NUMBER_RE.match(raw)
+    if m:
+        try:
+            return _format_build_number(int(m.group("num")))
+        except ValueError:
+            return None
+
+    m = _SEMVER_RE.match(raw)
+    if m:
+        try:
+            return _format_build_number(int(m.group("patch")))
+        except ValueError:
+            return None
+
+    return raw
 
 
 def _next_sequential_version(current_version: str | None) -> str:
-    desired_major = 0
-    desired_minor = 0
-    max_patch = 1_000_000  # treat huge patch (old timestamp style) as "unknown"
+    current = _parse_build_number(current_version)
+    return _format_build_number(max(1, current + 1))
 
-    if not current_version:
-        return f"{desired_major}.{desired_minor}.1"
+def _sync_achievement_catalog(repo_root: Path) -> None:
+    source = repo_root / "scenario-weaver" / "archivement.csv"
+    if not source.exists():
+        fallback = repo_root / "scenario-weaver" / "achivement.csv"
+        if fallback.exists():
+            source = fallback
+        else:
+            return
 
-    m = _SEMVER_RE.match(current_version.strip())
-    if not m:
-        return f"{desired_major}.{desired_minor}.1"
-
-    major = int(m.group("major"))
-    minor = int(m.group("minor"))
-    patch = int(m.group("patch"))
-
-    if major != desired_major or minor != desired_minor:
-        return f"{desired_major}.{desired_minor}.1"
-    if patch >= max_patch:
-        return f"{desired_major}.{desired_minor}.1"
-    return f"{desired_major}.{desired_minor}.{patch + 1}"
+    dest = repo_root / "src" / "trpg_bot" / "archivement.csv"
+    try:
+        src_bytes = source.read_bytes()
+        if dest.exists() and dest.read_bytes() == src_bytes:
+            return
+        dest.write_bytes(src_bytes)
+        print(f"Synced achievement catalog: {source} -> {dest}", file=sys.stderr)
+    except Exception as exc:
+        print(f"NOTE: Failed to sync achievement catalog CSV: {exc}", file=sys.stderr)
 
 
 def main() -> int:
@@ -315,16 +373,19 @@ def main() -> int:
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
-    repo_root = str(script_dir.parent)
+    repo_root_path = script_dir.parent
+    repo_root = str(repo_root_path)
 
     # Convenience: allow running the script without manually exporting variables.
     # Does not override existing environment variables.
     _load_dotenv(Path(repo_root) / ".env")
     _load_dotenv(script_dir / ".env")
 
+    _sync_achievement_catalog(repo_root_path)
+
     bot_token = _require_env("DISCORD_BOT_TOKEN")
     client_secret = _require_env("DISCORD_CLIENT_SECRET")
-    backend_build_version = os.environ.get("BACKEND_BUILD_VERSION")
+    backend_build_version = _normalize_build_version(os.environ.get("BACKEND_BUILD_VERSION"))
     if not backend_build_version:
         current = _try_read_stack_output(args.stack_name, args.region, "BackendBuildVersion")
         backend_build_version = _next_sequential_version(current)
@@ -339,6 +400,23 @@ def main() -> int:
         info = _fetch_discord_app_info(bot_token)
         application_id = application_id or info.application_id
         public_key = public_key or info.public_key
+
+    ui_stack_name = (
+        _optional_env("UI_STACK_NAME")
+        or _optional_env("ACTIVITY_UI_STACK_NAME")
+        or _optional_env("ACTIVITY_STACK_NAME")
+        or "discord-trpg-ui"
+    )
+
+    upload_bucket_name = _optional_env("UPLOAD_BUCKET_NAME")
+    upload_public_base_url = _optional_env("UPLOAD_PUBLIC_BASE_URL")
+    if not upload_bucket_name or not upload_public_base_url:
+        if not upload_bucket_name:
+            upload_bucket_name = _try_read_stack_output(ui_stack_name, args.region, "ActivityUiBucketName")
+        if not upload_public_base_url:
+            domain = _try_read_stack_output(ui_stack_name, args.region, "ActivityUiDomainName")
+            if domain:
+                upload_public_base_url = f"https://{domain}"
 
     if args.dry_run:
         print("DRY RUN: no commands will be executed.\n")
@@ -375,6 +453,11 @@ def main() -> int:
         f"TableName={args.table_name}",
         f"CreateTable={'true' if args.create_table else 'false'}",
     ]
+
+    if upload_bucket_name:
+        deploy_cmd.append(f"UploadBucketName={upload_bucket_name}")
+    if upload_public_base_url:
+        deploy_cmd.append(f"UploadPublicBaseUrl={upload_public_base_url}")
 
     if args.dry_run:
         _print_cmd(deploy_cmd, redact={"DiscordClientSecret", "DiscordBotToken"})

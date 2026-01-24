@@ -24,10 +24,18 @@ Parameters:
     NoEcho: true
   BackendBuildVersion:
     Type: String
-    Default: "0.0.0"
+    Default: "000"
   TableName:
     Type: String
     Default: trpg-discord-bot
+  UploadBucketName:
+    Type: String
+    Default: ""
+    Description: S3 bucket to store uploaded images (use the Activity UI bucket for same-domain access).
+  UploadPublicBaseUrl:
+    Type: String
+    Default: ""
+    Description: Public base URL used to serve uploaded images (e.g. https://dxxxx.cloudfront.net).
   CreateTable:
     Type: String
     Default: "false"
@@ -38,6 +46,7 @@ Parameters:
 
 Conditions:
   ShouldCreateTable: !Equals [!Ref CreateTable, "true"]
+  HasUploadBucket: !Not [!Equals [!Ref UploadBucketName, ""]]
 
 Resources:
   TrpgTable:
@@ -51,11 +60,36 @@ Resources:
           AttributeType: S
         - AttributeName: SK
           AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+        - AttributeName: GSI2PK
+          AttributeType: S
+        - AttributeName: GSI2SK
+          AttributeType: S
       KeySchema:
         - AttributeName: PK
           KeyType: HASH
         - AttributeName: SK
           KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI2
+          KeySchema:
+            - AttributeName: GSI2PK
+              KeyType: HASH
+            - AttributeName: GSI2SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
 
   DiscordInteractionApi:
     Type: AWS::Serverless::HttpApi
@@ -68,6 +102,9 @@ Resources:
         AllowMethods:
           - GET
           - POST
+          - PUT
+          - PATCH
+          - DELETE
           - OPTIONS
 
   DiscordInteractionFunction:
@@ -106,6 +143,11 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref TableName
+        - !If
+          - HasUploadBucket
+          - S3WritePolicy:
+              BucketName: !Ref UploadBucketName
+          - !Ref AWS::NoValue
       Environment:
         Variables:
           DISCORD_APPLICATION_ID: !Ref DiscordApplicationId
@@ -113,6 +155,8 @@ Resources:
           DISCORD_BOT_TOKEN: !Ref DiscordBotToken
           BACKEND_BUILD_VERSION: !Ref BackendBuildVersion
           TABLE_NAME: !Ref TableName
+          UPLOAD_BUCKET_NAME: !Ref UploadBucketName
+          UPLOAD_PUBLIC_BASE_URL: !Ref UploadPublicBaseUrl
       Events:
         UiApiToken:
           Type: HttpApi
@@ -131,6 +175,48 @@ Resources:
           Properties:
             ApiId: !Ref DiscordInteractionApi
             Path: /api/activity/me
+            Method: GET
+        UiApiUploadImage:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/uploads/image
+            Method: POST
+        UiApiUserAvatar:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/users/{userId}/avatar
+            Method: GET
+        UiApiNotifications:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/notifications
+            Method: GET
+        UiApiNotificationsRead:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/notifications/read
+            Method: POST
+        UiApiNotificationsReadAll:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/notifications/read_all
+            Method: POST
+        UiApiProfile:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/profile
+            Method: GET
+        UiApiAchievements:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/achievements
             Method: GET
         UiApiScenarios:
           Type: HttpApi
@@ -156,6 +242,42 @@ Resources:
             ApiId: !Ref DiscordInteractionApi
             Path: /api/scenario/{scenarioId}
             Method: GET
+        UiApiScenarioUpdatePut:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/scenario/{scenarioId}
+            Method: PUT
+        UiApiScenarioUpdatePatch:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/scenario/{scenarioId}
+            Method: PATCH
+        UiApiScenarioPreference:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/scenario/{scenarioId}/pref
+            Method: POST
+        UiApiScenarioGmRegister:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/scenario/{scenarioId}/gm_register
+            Method: POST
+        UiApiScenarioGmUnregister:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/scenario/{scenarioId}/gm_register
+            Method: DELETE
+        UiApiScenarioTelemetry:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/scenario/{scenarioId}/telemetry
+            Method: POST
         UiApiSessionsCreate:
           Type: HttpApi
           Properties:
@@ -167,6 +289,132 @@ Resources:
           Properties:
             ApiId: !Ref DiscordInteractionApi
             Path: /api/sessions/join
+            Method: POST
+        UiApiSessionClaimGm:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/claim_gm
+            Method: POST
+        UiApiRecruitingSelectMembers:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/recruiting/select_members
+            Method: POST
+        UiApiSessionsList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions
+            Method: GET
+        UiApiSessionDetail:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}
+            Method: GET
+        UiApiSessionCharacterSet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/character
+            Method: POST
+        UiApiSessionHandoutAssign:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/handouts/assign
+            Method: POST
+        UiApiSessionHandoutUnassign:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/handouts/unassign
+            Method: POST
+        UiApiSessionHandoutSecret:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/handouts/secret
+            Method: POST
+        UiApiSessionHandoutNotify:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/handouts/notify
+            Method: POST
+        UiApiSessionAddSchedule:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/add_schedule
+            Method: POST
+        UiApiSessionReschedule:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/reschedule
+            Method: POST
+        UiApiSessionReopenRecruiting:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/reopen_recruiting
+            Method: POST
+        UiApiSessionComplete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/complete
+            Method: POST
+        UiApiSessionCancel:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/cancel
+            Method: POST
+        UiApiSchedulingGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/scheduling
+            Method: GET
+        UiApiSchedulingSetup:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/scheduling/setup
+            Method: POST
+        UiApiSchedulingVote:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/scheduling/vote
+            Method: POST
+        UiApiSchedulingDecide:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/scheduling/decide
+            Method: POST
+        UiApiSchedulingComment:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/scheduling/comment
+            Method: POST
+        UiApiSchedulingCommentEdit:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/scheduling/comment_edit
+            Method: POST
+        UiApiSchedulingCommentDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordInteractionApi
+            Path: /api/sessions/{sessionId}/scheduling/comment_delete
             Method: POST
         UiApiPing:
           Type: HttpApi

@@ -171,6 +171,9 @@ def handle_health(_: dict) -> dict:
     gsi_list = desc.get("GlobalSecondaryIndexes") or []
     gsi_names = sorted([g.get("IndexName") for g in gsi_list if g.get("IndexName")])
     report["checks"]["GSIs"] = ", ".join(gsi_names) if gsi_names else "(none)"
+    missing = [name for name in ("GSI1", "GSI2") if name not in gsi_names]
+    if missing:
+        report["warnings"].append(f"Missing GSIs: {', '.join(missing)}")
 
     try:
         pk_name, sk_name = get_key_attribute_names()

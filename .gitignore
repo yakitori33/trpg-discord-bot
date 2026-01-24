@@ -19,3 +19,6 @@ aws/
 sam-installation/
 awscliv2.zip
 aws-sam-cli.zip
+
+# Reference repo clones
+session-forge-hub/

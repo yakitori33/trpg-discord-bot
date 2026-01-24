@@ -52,4 +52,12 @@ def get_region() -> str:
 
 
 def get_backend_build_version() -> str:
-    return optional_env("BACKEND_BUILD_VERSION", "0.0.0") or "0.0.0"
+    return optional_env("BACKEND_BUILD_VERSION", "000") or "000"
+
+
+def get_upload_bucket_name() -> str | None:
+    return optional_env("UPLOAD_BUCKET_NAME")
+
+
+def get_upload_public_base_url() -> str | None:
+    return optional_env("UPLOAD_PUBLIC_BASE_URL")

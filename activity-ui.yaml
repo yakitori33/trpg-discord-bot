@@ -4,7 +4,7 @@ Description: Scenario Weaver (Discord Activity UI) hosting - S3 + CloudFront
 Parameters:
   FrontendBuildVersion:
     Type: String
-    Default: "1.0.0"
+    Default: "000"
 
 Resources:
   ActivityUiBucket:

@@ -84,10 +84,30 @@ Discord（本実装）: `cd scenario-weaver && npm install && npm run dev:live`�
   - `POLL#{id}`: `META`、`SLOT#{id}`、`RESP#{slot_id}#{user}`
   - `SLOT#{id}`: `META`（slot_id→poll_id の逆引き）
   - `USER#{discord_id}`: `PROFILE`
-- GSIは不要です（`/health` はGSIsを表示しますが、存在しなくてもエラーにしません）。
+- シナリオ一覧/検索の高速化のために **GSI1/GSI2** を使います。
+  - GSI1: `GSI1PK` / `GSI1SK`（シナリオの作成日時順）
+  - GSI2: `GSI2PK` / `GSI2SK`（検索トークン用の逆引きインデックス）
+  - 検索はタイトルを2文字トークン化して逆引きし、Scanを回避します。
+  - 既存テーブルを使う場合は **GSI追加後にバックフィル** が必要です（下記スクリプト参照）。
 - `POLL#{poll_id}` の `META` に `session_id` を持たせ、`SLOT#{slot_id}` の `META` に `poll_id` を持たせることで、GSIなしで参照を解決します。
 - IDはUUID短縮(例: `scn_abcdefgh`)で払い出し、すべて文字列で扱います。
 - `migrations/001_init.sql` は旧PostgreSQL版の参考用に残しています（現在は未使用）。
+
+### GSIバックフィル（既存データ用）
+
+既存のシナリオに `GSI1PK/GSI1SK/GSI2PK/GSI2SK` が無い場合、以下を一度だけ実行してください。
+
+```bash
+python scripts/ddb_backfill_scenario_gsi.py --table trpg-discord-bot --region us-east-1 --yes
+```
+
+### 逆引きインデックス（検索用）バックフィル
+
+検索をScanなしで動かすため、既存シナリオに検索インデックスを付与します。
+
+```bash
+python scripts/ddb_backfill_scenario_search.py --table trpg-discord-bot --region us-east-1 --yes
+```
 
 ## AWSサーバレス構成 (SAM)
 

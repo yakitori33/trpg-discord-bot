@@ -38,28 +38,96 @@ ensure_scenario_weaver() {
   fi
 }
 
+has_dune_font() {
+  local fonts_dir="public/fonts"
+  local candidates=(
+    "${fonts_dir}/dune-rise.woff2"
+    "${fonts_dir}/dune.woff2"
+    "${fonts_dir}/dune-rise.woff"
+    "${fonts_dir}/dune.woff"
+    "${fonts_dir}/dune-rise.ttf"
+    "${fonts_dir}/dune.ttf"
+    "${fonts_dir}/dune-rise.otf"
+    "${fonts_dir}/dune.otf"
+  )
+  for f in "${candidates[@]}"; do
+    if [[ -f "${f}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+prepare_dune_font() {
+  local fonts_dir="public/fonts"
+
+  if [[ -n "${DUNE_RISE_FONT_FILE:-}" ]]; then
+    if [[ ! -f "${DUNE_RISE_FONT_FILE}" ]]; then
+      echo "ERROR: DUNE_RISE_FONT_FILE does not exist: ${DUNE_RISE_FONT_FILE}"
+      exit 1
+    fi
+    mkdir -p "${fonts_dir}"
+    cp "${DUNE_RISE_FONT_FILE}" "${fonts_dir}/dune-rise.woff2"
+    echo "[info] Copied Dune Rise font into ${fonts_dir}/dune-rise.woff2"
+  fi
+
+  if ! has_dune_font; then
+    echo "[warn] Dune Rise font files not found under ${fonts_dir}/"
+    echo "       Logo will fall back to Orbitron."
+    echo "       Place one of: dune-rise.woff2 / dune.woff2 (or woff/ttf/otf) under scenario-weaver/public/fonts/"
+  fi
+}
+
+verify_dune_font_dist() {
+  if has_dune_font; then
+    if [[ -d "dist/fonts" ]] && compgen -G "dist/fonts/dune*.*" > /dev/null; then
+      return 0
+    fi
+    echo "[warn] Dune font files were not copied into dist/fonts/ (check Vite public/ handling)."
+  fi
+}
+
 STACK_NAME="${STACK_NAME:-discord-trpg-ui}"
 REGION="${REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}}"
 TEMPLATE_FILE="${TEMPLATE_FILE:-activity-ui.yaml}"
 
-next_version() {
-  local current="$1"
-  local desired_major="1"
-  local desired_minor="0"
-  local max_patch="1000000"
-  local next_patch="0"
-
-  if [[ -n "${current}" && "${current}" != "None" ]]; then
-    local major minor patch
-    IFS='.' read -r major minor patch <<<"${current}"
-    if [[ "${major}" =~ ^[0-9]+$ && "${minor}" =~ ^[0-9]+$ && "${patch}" =~ ^[0-9]+$ ]]; then
-      if [[ "${major}" == "${desired_major}" && "${minor}" == "${desired_minor}" && "${patch}" -lt "${max_patch}" ]]; then
-        next_patch=$((patch + 1))
-      fi
-    fi
+normalize_version() {
+  local raw="$1"
+  if [[ -z "${raw}" || "${raw}" == "None" ]]; then
+    echo ""
+    return 0
   fi
 
-  echo "${desired_major}.${desired_minor}.${next_patch}"
+  # New style: "035"
+  if [[ "${raw}" =~ ^[0-9]+$ ]]; then
+    printf '%03d\n' "$((10#${raw}))"
+    return 0
+  fi
+
+  # Legacy style: "1.0.35" -> "035"
+  if [[ "${raw}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    local patch="${raw##*.}"
+    printf '%03d\n' "$((10#${patch}))"
+    return 0
+  fi
+
+  echo "${raw}"
+}
+
+next_version() {
+  local current="$1"
+  local normalized
+  normalized="$(normalize_version "${current}")"
+  if [[ -z "${normalized}" ]]; then
+    printf '%03d\n' 1
+    return 0
+  fi
+  if [[ "${normalized}" =~ ^[0-9]+$ ]]; then
+    printf '%03d\n' "$((10#${normalized} + 1))"
+    return 0
+  fi
+  # Unknown format: reset to 001
+  printf '%03d\n' 1
 }
 
 CURRENT_FE_VERSION="$(
@@ -71,11 +139,11 @@ CURRENT_FE_VERSION="$(
 )"
 
 if [[ -n "${VITE_FRONTEND_BUILD_VERSION:-}" ]]; then
-  FRONTEND_BUILD_VERSION="${VITE_FRONTEND_BUILD_VERSION}"
+  FRONTEND_BUILD_VERSION="$(normalize_version "${VITE_FRONTEND_BUILD_VERSION}")"
 elif [[ -n "${FRONTEND_BUILD_VERSION:-}" ]]; then
-  FRONTEND_BUILD_VERSION="${FRONTEND_BUILD_VERSION}"
+  FRONTEND_BUILD_VERSION="$(normalize_version "${FRONTEND_BUILD_VERSION}")"
 elif [[ "${SKIP_BUILD:-}" == "1" ]]; then
-  FRONTEND_BUILD_VERSION="${CURRENT_FE_VERSION:-1.0.0}"
+  FRONTEND_BUILD_VERSION="$(normalize_version "${CURRENT_FE_VERSION:-000}")"
 else
   FRONTEND_BUILD_VERSION="$(next_version "${CURRENT_FE_VERSION}")"
 fi
@@ -123,7 +191,9 @@ else
   if [[ ! -d node_modules ]]; then
     npm install
   fi
+  prepare_dune_font
   npm run build
+  verify_dune_font_dist
 
   popd >/dev/null
 fi
@@ -134,7 +204,7 @@ if [[ ! -d scenario-weaver/dist ]]; then
 fi
 
 echo "[4/4] Upload to S3 and invalidate CloudFront"
-aws s3 sync scenario-weaver/dist "s3://${BUCKET_NAME}/" --delete
+aws s3 sync scenario-weaver/dist "s3://${BUCKET_NAME}/" --delete --exclude "uploads/*"
 aws cloudfront create-invalidation --distribution-id "${DIST_ID}" --paths "/*" >/dev/null
 
 echo "OK: https://${DOMAIN_NAME}"
